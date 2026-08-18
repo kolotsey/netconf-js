@@ -40,9 +40,23 @@ export interface NetconfParams {
    */
   user: string;
   /**
-   * Netconf password.
+   * Netconf password. Can be omitted when `privateKey` or `agent` authentication is used.
    */
-  pass: string;
+  pass?: string;
+  /**
+   * Private key for public key authentication. This is the content of the key file, not its path.
+   * Set `passphrase` as well if the key is encrypted.
+   */
+  privateKey?: Buffer | string;
+  /**
+   * Passphrase that decrypts an encrypted `privateKey`.
+   */
+  passphrase?: string;
+  /**
+   * Path to the socket of a running ssh agent, usually the value of the SSH_AUTH_SOCK
+   * environment variable.
+   */
+  agent?: string;
   /**
    * Do not include namespaces in the result.
    * All namespaces, as well as other data that comes in attributes in the result xml,

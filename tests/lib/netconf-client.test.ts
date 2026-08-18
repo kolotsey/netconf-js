@@ -67,6 +67,71 @@ describe('NetconfClient', () => {
     });
   });
 
+  describe('authentication', () => {
+    test('pass the password to the ssh client', () => {
+      const sub = client.hello().subscribe({ error: () => {} });
+      expect(mockConnect).toHaveBeenCalledWith(expect.objectContaining({
+        host: 'test-host',
+        port: 830,
+        username: 'test-user',
+        password: 'test-pass',
+      }));
+      sub.unsubscribe();
+    });
+
+    test('pass the private key, its passphrase and the agent to the ssh client', () => {
+      const keyClient = new NetconfClientTest({
+        host: 'test-host',
+        port: 830,
+        user: 'test-user',
+        privateKey: 'private-key-content',
+        passphrase: 'key-passphrase',
+        agent: '/tmp/ssh-agent.sock',
+      });
+      const sub = keyClient.hello().subscribe({ error: () => {} });
+      expect(mockConnect).toHaveBeenCalledWith(expect.objectContaining({
+        username: 'test-user',
+        privateKey: 'private-key-content',
+        passphrase: 'key-passphrase',
+        agent: '/tmp/ssh-agent.sock',
+      }));
+      sub.unsubscribe();
+    });
+
+    test('do not send a password when only a key is configured', () => {
+      const keyClient = new NetconfClientTest({
+        host: 'test-host',
+        port: 830,
+        user: 'test-user',
+        privateKey: 'private-key-content',
+      });
+      const sub = keyClient.hello().subscribe({ error: () => {} });
+      expect(mockConnect).toHaveBeenCalledWith(expect.objectContaining({ password: undefined }));
+      sub.unsubscribe();
+    });
+
+    test('throw when no authentication method is configured', async () => {
+      const noAuthClient = new NetconfClientTest({ host: 'test-host', port: 830, user: 'test-user' });
+      await expect(firstValueFrom(noAuthClient.hello()))
+        .rejects.toThrow('No authentication method provided: set pass, privateKey or agent');
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    test('report the error when connect() rejects the configuration synchronously', async () => {
+      // This is how ssh2 reports an unparseable or encrypted-without-passphrase private key
+      mockConnect.mockImplementationOnce(() => {
+        throw new Error('Cannot parse privateKey: Encrypted private key detected, but no passphrase given');
+      });
+      const keyClient = new NetconfClientTest({
+        host: 'test-host',
+        port: 830,
+        user: 'test-user',
+        privateKey: 'encrypted-key-content',
+      });
+      await expect(firstValueFrom(keyClient.hello())).rejects.toThrow('Cannot parse privateKey');
+    });
+  });
+
   describe('closing connection', () => {
     test('throw error when trying to close uninitialized connection', async () => {
       await expect(firstValueFrom(client.close())).rejects.toThrow('Trying to close connection that was not opened');

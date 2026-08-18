@@ -1,4 +1,7 @@
 // import * as getoptsImport from 'getopts';
+import { readFile } from 'fs/promises';
+import { homedir } from 'os';
+import { join } from 'path';
 import * as getoptsImport from 'getopts';
 import * as packageJson from '../../package.json' with { type: 'json' };
 import { GetDataResultType, NamespaceType, NetconfType, SafeAny } from '../lib/index.ts';
@@ -269,9 +272,25 @@ export interface CliOptions {
   user: string;
 
   /**
-   * Netconf password
+   * Netconf password. Undefined when public key or agent authentication is used and no password
+   * was provided explicitly.
    */
-  pass: string;
+  pass?: string;
+
+  /**
+   * Content of the private key file, for public key authentication
+   */
+  privateKey?: Buffer;
+
+  /**
+   * Passphrase that decrypts an encrypted private key
+   */
+  passphrase?: string;
+
+  /**
+   * Path to the socket of a running ssh agent
+   */
+  agent?: string;
 
   /**
    * Operation to be performed
@@ -313,10 +332,11 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       f: ['fulltree', 'full-tree'],
       h: 'help',
       H: 'host',
+      i: 'identity',
       j: 'json',
       k: ['keyvalue', 'key-value'],
       p: 'port',
-      P: 'pass',
+      P: ['pass', 'password'],
       readonly: 'read-only',
       schema: ['schemaonly', 'schema-only'],
       s: ['shownamespaces', 'show-namespaces'],
@@ -329,12 +349,15 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       y: 'yaml',
     },
     default: {
+      agent: false,
       allowmultiple: false,
       beforekey: undefined,
       configonly: false,
       fulltree: false,
       host: undefined,
+      identity: undefined,
       json: false,
+      passphrase: undefined,
       keyvalue: false,
       namespace: undefined,
       pass: undefined,
@@ -351,7 +374,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     },
     // eslint-disable-next-line id-denylist
     boolean: [
-      'allowmultiple', 'configonly', 'fulltree', 'help', 'json', 'keyvalue', 'read-only', 'schemaonly',
+      'agent', 'allowmultiple', 'configonly', 'fulltree', 'help', 'json', 'keyvalue', 'read-only', 'schemaonly',
       'shownamespaces', 'stateonly', 'stdin', 'version', 'verbose', 'xml', 'yaml', 'hello',
     ],
     unknown: (optionName: string): boolean => {
@@ -451,6 +474,21 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
 
   // Get connection arguments
   const connArgs = getConnectionArgs(opt, conn);
+
+  // Get public key authentication arguments
+  const identity = stringOption(opt.identity, '--identity') ?? process.env.NETCONF_IDENTITY;
+  if(identity !== undefined && passOnCommandLine(opt, conn)){
+    throw new Error('Cannot mix --identity and --password: provide either a private key or a password');
+  }
+  const privateKey = identity === undefined ? undefined : await readIdentityFile(identity);
+  const passphrase = stringOption(opt.passphrase, '--passphrase') ?? process.env.NETCONF_PASSPHRASE;
+  let agent: string | undefined;
+  if(opt.agent){
+    agent = process.env.SSH_AUTH_SOCK;
+    if(!agent){
+      throw new Error('--agent requires a running ssh agent, but the SSH_AUTH_SOCK environment variable is not set');
+    }
+  }
 
 
   // Determine the operation type to be performed
@@ -596,11 +634,24 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     namespaces.push(process.env.NETCONF_NAMESPACE);
   }
 
+  // Resolve the password. A private key rules out a password completely: providing both on the
+  // command line is an error, and a password left over in the environment is not meant as a second
+  // authentication method. The default password is only a fallback for password authentication:
+  // sending it next to a key or an agent would spend a failed password attempt on every connection,
+  // which some servers count towards locking the account out.
+  let pass: string | undefined;
+  if(privateKey === undefined){
+    pass = connArgs.pass ?? (agent ? undefined : DEFAULT_PASS);
+  }
+
   const cliOptions: CliOptions = {
     host: connArgs.host,
     port: connArgs.port ?? DEFAULT_PORT,
     user: connArgs.user ?? DEFAULT_USER,
-    pass: connArgs.pass ?? DEFAULT_PASS,
+    pass,
+    privateKey,
+    passphrase,
+    agent,
     operation,
     namespaces,
     readOnly: opt['read-only'],
@@ -610,6 +661,56 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
   };
 
   return cliOptions;
+}
+
+/**
+ * Test whether a password was provided on the command line, either with the -P flag or inside the
+ * connection string. A password that comes from the environment is not a command line argument: it
+ * is an ambient default and does not conflict with an explicitly requested key.
+ *
+ * @param opt - Command line options
+ * @param connStr - Connection string, if present in command line arguments
+ * @returns True if the command line carries a password
+ */
+function passOnCommandLine(opt: getoptsImport.ParsedOptions, connStr?: string): boolean {
+  return opt.pass !== undefined || (connStr !== undefined && parseConnStr(connStr).pass !== undefined);
+}
+
+/**
+ * Validate an option that requires a value. getopts yields `true` for a flag given without a value
+ * and an array for a flag given more than once.
+ *
+ * @param value - The value of the option as parsed by getopts
+ * @param name - The name of the option, used in the error message
+ * @returns The value of the option, or undefined if the option was not provided
+ */
+function stringOption(value: SafeAny, name: string): string | undefined {
+  if(value === undefined || value === ''){
+    return undefined;
+  }
+  if(Array.isArray(value)){
+    throw new Error(`Option ${name} provided more than once`);
+  }
+  if(typeof value !== 'string'){
+    throw new Error(`Option ${name} requires a value`);
+  }
+  return value;
+}
+
+/**
+ * Read a private key from a file. A leading `~/` is expanded, so that the path also works when it
+ * comes from the environment, where the shell does not expand it.
+ *
+ * @param path - Path to the private key file
+ * @returns The content of the private key file
+ */
+async function readIdentityFile(path: string): Promise<Buffer> {
+  const expanded = path.startsWith('~/') ? join(homedir(), path.substring(2)) : path;
+  try{
+    return await readFile(expanded);
+  }catch(err){
+    throw new Error(`Cannot read the identity file ${expanded}: ${(err as Error).message}`);
+  }
 }
 
 function pushKeyValuePair(obj: NetconfType, argument: string): void {

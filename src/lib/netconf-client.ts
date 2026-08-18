@@ -107,6 +107,9 @@ export class NetconfClient {
         return throwError(() => new Error('Trying to use connection that was closed after an error'));
       }
       if(this.netconfChannelSubject$.getValue().state === 'uninitialized'){
+        if(this.params.pass === undefined && !this.params.privateKey && !this.params.agent){
+          return throwError(() => new Error('No authentication method provided: set pass, privateKey or agent'));
+        }
         this.debug(`Opening connection to ${this.params.user}@${this.params.host}:${this.params.port}`, NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
         this.netconfChannelSubject$.next({ state: 'connecting' });
 
@@ -119,14 +122,24 @@ export class NetconfClient {
         this.sshClient.on('timeout', this.sshTimeoutEvent);
         this.sshClient.on('close',   this.sshCloseEvent);
 
-        this.sshClient.connect({
-          host: this.params.host,
-          username: this.params.user,
-          port: this.params.port,
-          password: this.params.pass,
-          readyTimeout: SSH_TIMEOUT,
-          debug: (message: string): void => this.debug(message, SSH_DEBUG_TAG, SSH_DEBUG_LEVEL),
-        });
+        try{
+          this.sshClient.connect({
+            host: this.params.host,
+            username: this.params.user,
+            port: this.params.port,
+            password: this.params.pass,
+            privateKey: this.params.privateKey,
+            passphrase: this.params.passphrase,
+            agent: this.params.agent,
+            readyTimeout: SSH_TIMEOUT,
+            debug: (message: string): void => this.debug(message, SSH_DEBUG_TAG, SSH_DEBUG_LEVEL),
+          });
+        }catch(err){
+          // connect() validates the configuration synchronously and throws, for example, when the
+          // private key cannot be parsed. Report it through the usual error path so that the client
+          // is not left in the 'connecting' state.
+          this.handleError(err as Error);
+        }
       }
       return this.netconfChannelSubject$.asObservable().pipe(
         filter(Boolean),

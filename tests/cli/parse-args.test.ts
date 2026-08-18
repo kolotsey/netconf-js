@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { OperationType, parseArgs, ResultFormat } from '../../src/cli/parse-args';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { homedir, tmpdir } from 'os';
+import { join } from 'path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { DEFAULT_PASS, OperationType, parseArgs, ResultFormat } from '../../src/cli/parse-args';
 import { Output } from '../../src/cli/output';
 import { GetDataResultType } from '../../src/lib';
 
@@ -13,6 +16,9 @@ beforeEach(() => {
   vi.stubEnv('NETCONF_USER', undefined);
   vi.stubEnv('NETCONF_PASS', undefined);
   vi.stubEnv('NETCONF_NAMESPACE', undefined);
+  vi.stubEnv('NETCONF_IDENTITY', undefined);
+  vi.stubEnv('NETCONF_PASSPHRASE', undefined);
+  vi.stubEnv('SSH_AUTH_SOCK', undefined);
   // Suppress console output
   vi.spyOn(console, 'info').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -73,6 +79,23 @@ describe('parse connection arguments', () => {
       user: 'user',
       pass: 'pass',
     }));
+  });
+
+  test.each([
+    ['-P'],
+    ['--pass'],
+    ['--password'],
+  ])('parse the password given with "%s"', async option => {
+    process.argv = ['node', 'netconf', 'host', option, 'secret'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ pass: 'secret' }));
+  });
+
+  test.each([
+    ['-U'],
+    ['--user'],
+  ])('parse the user given with "%s"', async option => {
+    process.argv = ['node', 'netconf', 'host', option, 'someone'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ user: 'someone' }));
   });
 
   test('merge from env, conn-str, and args', async () => {
@@ -329,6 +352,164 @@ describe('parse arguments', () => {
         }),
       }),
     }));
+  });
+});
+
+describe('public key authentication', () => {
+  const KEY_CONTENT = '-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-real-key\n-----END OPENSSH PRIVATE KEY-----\n';
+  let dir: string;
+  let keyFile: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'netconf-client-test-'));
+    keyFile = join(dir, 'id_test');
+    await writeFile(keyFile, KEY_CONTENT);
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test.each([
+    ['-i'],
+    ['--identity'],
+  ])('read the private key from the file given with "%s"', async option => {
+    process.argv = ['node', 'netconf', 'localhost', option, keyFile];
+    const result = await parseArgs();
+    expect(result?.privateKey?.toString()).toBe(KEY_CONTENT);
+  });
+
+  test('take the identity from NETCONF_IDENTITY', async () => {
+    vi.stubEnv('NETCONF_IDENTITY', keyFile);
+    process.argv = ['node', 'netconf', 'localhost'];
+    const result = await parseArgs();
+    expect(result?.privateKey?.toString()).toBe(KEY_CONTENT);
+  });
+
+  test('--identity overrides NETCONF_IDENTITY', async () => {
+    vi.stubEnv('NETCONF_IDENTITY', join(dir, 'does-not-exist'));
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile];
+    const result = await parseArgs();
+    expect(result?.privateKey?.toString()).toBe(KEY_CONTENT);
+  });
+
+  test('expand a leading ~/ in the identity path', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '-i', '~/.ssh/netconf-client-no-such-key'];
+    // The path is reported expanded, which is the only observable effect when the file is missing
+    await expect(parseArgs()).rejects.toThrow(
+      `Cannot read the identity file ${join(homedir(), '.ssh/netconf-client-no-such-key')}`
+    );
+  });
+
+  test('the default password is not sent when a key is provided', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ pass: undefined }));
+  });
+
+  test.each([
+    [['localhost', '-i', '<key>', '-P', 'secret']],
+    [['localhost', '-P', 'secret', '-i', '<key>']],
+    [['localhost', '--pass', 'secret', '--identity', '<key>']],
+    [['localhost', '--password', 'secret', '--identity', '<key>']],
+    // A password inside the connection string is given on the command line just as -P is
+    [['user:secret@localhost', '-i', '<key>']],
+  ])('error when a key and a password are both provided: "%s"', async args => {
+    process.argv = ['node', 'netconf', ...args.map(a => a === '<key>' ? keyFile : a)];
+    await expect(parseArgs()).rejects.toThrow(
+      'Cannot mix --identity and --password: provide either a private key or a password'
+    );
+  });
+
+  test('error when NETCONF_IDENTITY is combined with a password on the command line', async () => {
+    vi.stubEnv('NETCONF_IDENTITY', keyFile);
+    process.argv = ['node', 'netconf', 'localhost', '-P', 'secret'];
+    await expect(parseArgs()).rejects.toThrow('Cannot mix --identity and --password');
+  });
+
+  test('a password in the environment is ignored, not rejected, when a key is provided', async () => {
+    vi.stubEnv('NETCONF_PASS', 'from-env');
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ pass: undefined }));
+  });
+
+  test('a user in the connection string is still accepted alongside a key', async () => {
+    process.argv = ['node', 'netconf', 'user@localhost', '-i', keyFile];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ user: 'user', pass: undefined }));
+  });
+
+  test('--agent can be combined with a password, which is tried first', async () => {
+    vi.stubEnv('SSH_AUTH_SOCK', '/tmp/ssh-agent.sock');
+    process.argv = ['node', 'netconf', 'localhost', '--agent', '-P', 'secret'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({
+      agent: '/tmp/ssh-agent.sock',
+      pass: 'secret',
+    }));
+  });
+
+  test('the default password still applies without a key or an agent', async () => {
+    process.argv = ['node', 'netconf', 'localhost'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({
+      pass: DEFAULT_PASS,
+      privateKey: undefined,
+      agent: undefined,
+    }));
+  });
+
+  test.each([
+    ['--passphrase', 'from-flag'],
+  ])('parse the passphrase from "%s"', async (option, expected) => {
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile, option, expected];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ passphrase: expected }));
+  });
+
+  test('take the passphrase from NETCONF_PASSPHRASE', async () => {
+    vi.stubEnv('NETCONF_PASSPHRASE', 'from-env');
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ passphrase: 'from-env' }));
+  });
+
+  test('--passphrase overrides NETCONF_PASSPHRASE', async () => {
+    vi.stubEnv('NETCONF_PASSPHRASE', 'from-env');
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile, '--passphrase', 'from-flag'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ passphrase: 'from-flag' }));
+  });
+
+  test('--agent takes the socket from SSH_AUTH_SOCK and suppresses the default password', async () => {
+    vi.stubEnv('SSH_AUTH_SOCK', '/tmp/ssh-agent.sock');
+    process.argv = ['node', 'netconf', 'localhost', '--agent'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({
+      agent: '/tmp/ssh-agent.sock',
+      pass: undefined,
+    }));
+  });
+
+  test('the agent is not used unless --agent is provided', async () => {
+    vi.stubEnv('SSH_AUTH_SOCK', '/tmp/ssh-agent.sock');
+    process.argv = ['node', 'netconf', 'localhost'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({
+      agent: undefined,
+      pass: DEFAULT_PASS,
+    }));
+  });
+
+  test('error when --agent is provided without a running agent', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '--agent'];
+    await expect(parseArgs()).rejects.toThrow('SSH_AUTH_SOCK environment variable is not set');
+  });
+
+  test('error when the identity file cannot be read', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '-i', join(dir, 'does-not-exist')];
+    await expect(parseArgs()).rejects.toThrow('Cannot read the identity file');
+  });
+
+  test('error when --identity is provided without a value', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '--identity'];
+    await expect(parseArgs()).rejects.toThrow('Option --identity requires a value');
+  });
+
+  test('error when --identity is provided more than once', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '-i', keyFile, '-i', keyFile];
+    await expect(parseArgs()).rejects.toThrow('Option --identity provided more than once');
   });
 });
 

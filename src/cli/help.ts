@@ -30,6 +30,7 @@ export function showHelp(): void {
     ${green(`${exe} [FLAGS] [CONN_STR] [XPATH|STREAM] sub`)}
   
 ${cyan('Flags:')}
+      --agent             - authenticate with the ssh agent listening on $SSH_AUTH_SOCK
       --allow-multiple    - allow multiple schema branches to be edited in a single operation
   -b, --before-key        - print the new key before the specified key (for ${bold('add')} operation). See examples below.
       --config-only       - print only the configuration
@@ -37,9 +38,14 @@ ${cyan('Flags:')}
       --hello             - print hello message and exit
   -h, --help              - this help
   -H, --host              - Netconf host
+  -i, --identity          - path to the private key file to authenticate with. A leading ~/ is expanded.
+                              Cannot be combined with a password. No password is sent when a key is
+                              provided, so the account is not locked out by failed password attempts.
   -j, --json              - print result in JSON format
   -k, --key-value         - print result as XPATH=value pairs, one per line
-  -P, --password          - password (default: ${DEFAULT_PASS})
+      --passphrase        - passphrase that decrypts the private key given with --identity
+  -P, --password          - password (default: ${DEFAULT_PASS}, not applied with --identity or --agent).
+                              Cannot be combined with --identity.
   -p, --port              - Netconf port number (default: ${DEFAULT_PORT})
       --read-only         - only read the data from the server, no edit-config operations
       --schema-only       - print only the schema
@@ -82,6 +88,9 @@ ${cyan('Examples:')}
   Query the running configuration for the user list
       ${green('${exe} netconf-host /aaa//users')}
 
+  Query the interface list, authenticating with a private key instead of a password
+      ${green(`${exe} -i ~/.ssh/id_ed25519 user@netconf-host /interfaces`)}
+
   Create a new user (${bold('operation: merge')}) with username 'user' and password 'pass'. The AAA namespace is specified
   using the --xmlns flag.
       ${green(`${exe} user:pass@netconf-host:2022 --xmlns=http://tail-f.com/ns/aaa/1.1 \\
@@ -110,5 +119,8 @@ ${cyan('Environment Variables:')}
   NETCONF_PASS - Netconf password
   NETCONF_PORT - Netconf port
   NETCONF_NAMESPACE - Netconf namespace, used when no --xmlns flag is provided
+  NETCONF_IDENTITY - path to the private key file, used when no --identity flag is provided
+  NETCONF_PASSPHRASE - passphrase of the private key, used when no --passphrase flag is provided
+  SSH_AUTH_SOCK - socket of the ssh agent, used by --agent
 `);
 }

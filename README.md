@@ -292,6 +292,21 @@ See the Library and CLI tool source code for more advanced usage examples.
     Initializes a new Netconf instance. The `params` object specifies connection parameters (host, port, username,
     password) and an optional namespace that is added to the request.
 
+    Instead of `pass`, the client can authenticate with a public key or with an ssh agent. Provide the *content*
+    of the key file in `privateKey` (with `passphrase` if the key is encrypted), or the path to the agent socket
+    in `agent`:
+    ```typescript
+    const netconf = new Netconf({
+      host: 'localhost',
+      port: 2022,
+      user: 'admin',
+      privateKey: await readFile('/home/user/.ssh/id_ed25519'),
+      // passphrase: 'secret',
+      // agent: process.env.SSH_AUTH_SOCK,
+    });
+    ```
+    At least one of `pass`, `privateKey` or `agent` is required.
+
     Note that the connection to the server is lazy-loaded and won't be established until you invoke a method
     on the instance.
 
