@@ -355,6 +355,35 @@ describe('parse arguments', () => {
   });
 });
 
+describe('candidate datastore', () => {
+  test.each([
+    [['com'], OperationType.COMMIT],
+    [['commit'], OperationType.COMMIT],
+    [['dis'], OperationType.DISCARD],
+    [['discard'], OperationType.DISCARD],
+  ])('parse operation type: "%s"', async (option, expected) => {
+    process.argv = ['node', 'netconf', 'localhost', ...option];
+    expect(await parseArgs()).toEqual(expect.objectContaining({
+      operation: { type: expected },
+    }));
+  });
+
+  test.each([
+    // flags, datastore, autoCommit
+    [[], undefined, false],
+    [['--candidate'], 'candidate', false],
+    [['--candidate', '--commit'], 'candidate', true],
+  ])('parse %s as datastore=%s, autoCommit=%s', async (flags, datastore, autoCommit) => {
+    process.argv = ['node', 'netconf', 'localhost', ...flags, '/foo', 'name=x'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ datastore, autoCommit }));
+  });
+
+  test('error when --commit is used without --candidate', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '--commit', '/foo', 'name=x'];
+    await expect(parseArgs()).rejects.toThrow('--commit requires --candidate');
+  });
+});
+
 describe('timeout', () => {
   test.each([
     ['30', 30000],

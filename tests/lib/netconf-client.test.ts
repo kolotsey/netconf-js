@@ -596,8 +596,25 @@ describe('NetconfClient', () => {
         'get-config': { source: { running: {} } },
       })).then(() => undefined, (err: Error) => err);
 
-      // The request reports the closed connection, not the error that closed it
-      expect(error?.message).toBe('Trying to use connection that was closed after an error');
+      // The request reports the closed connection and names the error that closed it
+      expect(error?.message)
+        .toBe('Trying to use connection that was closed after an error: SSH session closed unexpectedly');
+    });
+
+    test('name the underlying cause on every later request, not just the first', async () => {
+      await connect();
+
+      sshCallbacks.error(new Error('read ECONNRESET'));
+
+      for(const _attempt of [1, 2]){
+        const error: Error | undefined = await firstValueFrom(client.rpcExec({
+          'get-config': { source: { running: {} } },
+        })).then(() => undefined, (err: Error) => err);
+
+        expect(error?.message).toBe(
+          'Trying to use connection that was closed after an error: read ECONNRESET'
+        );
+      }
     });
 
     test('report a rejected subscription instead of completing silently', async () => {

@@ -439,6 +439,27 @@ export class Netconf extends NetconfClient{
   }
 
   /**
+   * Commits the candidate datastore, applying the changes collected there to the running
+   * configuration. Only meaningful when the client is configured with `datastore: 'candidate'`.
+   * The server must advertise the :candidate capability.
+   *
+   * @returns {Observable<RpcResult>} Observable of the result
+   */
+  public commit(): Observable<RpcResult> {
+    return this.rpcExecOk({ commit: null }, 'Commit');
+  }
+
+  /**
+   * Discards the changes collected in the candidate datastore, reverting it to the contents of the
+   * running configuration. The server must advertise the :candidate capability.
+   *
+   * @returns {Observable<RpcResult>} Observable of the result
+   */
+  public discardChanges(): Observable<RpcResult> {
+    return this.rpcExecOk({ 'discard-changes': null }, 'Discard-changes');
+  }
+
+  /**
    * Creates a subscription to the Netconf server and returns an observable that emits notifications as they arrive.
    * See README for an example.
    *
@@ -528,12 +549,38 @@ export class Netconf extends NetconfClient{
     );
   }
 
+  /**
+   * Send a request that the server answers with a bare <ok/>, and check that confirmation.
+   *
+   * @param {NetconfType} request - The request to send
+   * @param {string} operation - Name of the operation, used in the error messages
+   * @returns {Observable<RpcResult>} Observable of the result
+   */
+  private rpcExecOk(request: NetconfType, operation: string): Observable<RpcResult> {
+    if(this.params.readOnly){
+      this.debug('Read-only mode. Would send the following request to the server:', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+      this.debug(JSON.stringify(request, null, 2), NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+      return throwError(() => new Error('Operation not performed: in read-only mode'));
+    }
+
+    return this.rpcExec(request).pipe(
+      map((data: RpcReply): RpcResult => {
+        if(!data.result?.hasOwnProperty('rpc-reply')){
+          throw new Error(`${operation} operation failed: server response did not include rpc-reply`);
+        }
+        const reply = data.result['rpc-reply'];
+        if(reply?.ok === undefined){
+          throw new Error(`${operation} operation failed: server response did not include OK confirmation`);
+        }
+        return { xml: data.xml, result: reply };
+      }),
+    );
+  }
+
   private editConfig(configObj: NetconfType): Observable<EditConfigResult>{
     const request = {
       'edit-config': {
-        target: {
-          running: null,
-        },
+        target: this.params.datastore === 'candidate' ? { candidate: null } : { running: null },
         config: configObj,
       },
     };

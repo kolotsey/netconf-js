@@ -458,6 +458,80 @@ describe('editConfigDelete', () => {
   });
 });
 
+describe('candidate datastore', () => {
+  const options: NetconfParams = { host: 'localhost', port: 830, user: 'admin', pass: 'admin' };
+  const okReply = { result: { 'rpc-reply': { ok: null } }, xml: '<rpc-reply/>' };
+
+  test.each([
+    [undefined, { running: null }],
+    ['running' as const, { running: null }],
+    ['candidate' as const, { candidate: null }],
+  ])('edit-config targets the right datastore for %s', async (datastore, expected) => {
+    const instance = new NetconfTest({ ...options, datastore });
+    instance.fetchSchema = vi.fn().mockReturnValue(of({}));
+    instance.rpcExec = vi.fn().mockReturnValue(of(okReply));
+
+    await firstValueFrom(instance.editConfigMerge('/simple/xpath', { merged: true }));
+
+    expect(instance.rpcExec).toHaveBeenCalledWith(expect.objectContaining({
+      'edit-config': expect.objectContaining({ target: expected }),
+    }));
+  });
+
+  test('commit sends a bare commit rpc', async () => {
+    const instance = new NetconfTest(options);
+    instance.rpcExec = vi.fn().mockReturnValue(of(okReply));
+
+    const result = await firstValueFrom(instance.commit());
+
+    expect(instance.rpcExec).toHaveBeenCalledWith({ commit: null });
+    expect(result).toEqual({ xml: '<rpc-reply/>', result: { ok: null } });
+  });
+
+  test('discardChanges sends a bare discard-changes rpc', async () => {
+    const instance = new NetconfTest(options);
+    instance.rpcExec = vi.fn().mockReturnValue(of(okReply));
+
+    const result = await firstValueFrom(instance.discardChanges());
+
+    expect(instance.rpcExec).toHaveBeenCalledWith({ 'discard-changes': null });
+    expect(result).toEqual({ xml: '<rpc-reply/>', result: { ok: null } });
+  });
+
+  test.each([
+    ['commit' as const, 'Commit'],
+    ['discardChanges' as const, 'Discard-changes'],
+  ])('%s fails when the server does not confirm with ok', async (method, label) => {
+    const instance = new NetconfTest(options);
+    instance.rpcExec = vi.fn().mockReturnValue(of({ result: { 'rpc-reply': {} }, xml: '<rpc-reply/>' }));
+
+    await expect(firstValueFrom(instance[method]()))
+      .rejects.toThrow(`${label} operation failed: server response did not include OK confirmation`);
+  });
+
+  test.each([
+    ['commit' as const],
+    ['discardChanges' as const],
+  ])('%s fails when the reply carries no rpc-reply', async method => {
+    const instance = new NetconfTest(options);
+    instance.rpcExec = vi.fn().mockReturnValue(of({ result: {}, xml: '<rpc-reply/>' }));
+
+    await expect(firstValueFrom(instance[method]())).rejects.toThrow('did not include rpc-reply');
+  });
+
+  test.each([
+    ['commit' as const],
+    ['discardChanges' as const],
+  ])('%s does nothing in read-only mode', async method => {
+    const instance = new NetconfTest({ ...options, readOnly: true });
+    instance.rpcExec = vi.fn().mockReturnValue(of(okReply));
+
+    await expect(firstValueFrom(instance[method]()))
+      .rejects.toThrow('Operation not performed: in read-only mode');
+    expect(instance.rpcExec).not.toHaveBeenCalled();
+  });
+});
+
 describe('subscription', () => {
   test('call rpcStream with xpath filter', () => {
     const options = { host: 'localhost', port: 830, user: 'admin', pass: 'admin' };

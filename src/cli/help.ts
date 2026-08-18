@@ -32,6 +32,13 @@ export function showHelp(): void {
 ${cyan('Flags:')}
       --agent             - authenticate with the ssh agent listening on $SSH_AUTH_SOCK
       --allow-multiple    - allow multiple schema branches to be edited in a single operation
+      --candidate         - write the edit-config to the candidate datastore instead of the running
+                              configuration. The changes stay there until they are applied with the ${bold('com')}
+                              operation, or dropped with ${bold('dis')}. Requires the :candidate capability on the
+                              server. Only affects edit-config, reads are unchanged.
+      --commit            - only together with --candidate: commit the candidate to the running configuration
+                              as soon as the edit-config succeeded. To commit without editing, use the ${bold('com')}
+                              operation instead.
   -b, --before-key        - print the new key before the specified key (for ${bold('add')} operation). See examples below.
       --config-only       - print only the configuration
   -f, --full-tree         - display the complete result tree (only the requested object is shown by default)
@@ -78,10 +85,12 @@ ${cyan('Flags:')}
                               rep: edit-config with ${bold('replace')} operation, key is required
                               sub: ${bold('subscribe')} to notifications
                               rpc: execute a Netconf ${bold('RPC')}; provide RPC command as XPath ${bold('without wildcards')}
+                              com: ${bold('commit')} the candidate datastore
+                              dis: ${bold('discard')} the changes collected in the candidate datastore
                               N.B.: If no operation is provided, ${bold('get')} and ${bold('merge')} are assumed
                               N.B.: Each keyword can also be spelled out in full (update, create, delete,
-                                replace, subscribe). Accepted aliases: set/mer/merge for upd, cre for add,
-                                rem/remove for del, exec for rpc
+                                replace, subscribe, commit, discard). Accepted aliases: set/mer/merge for upd,
+                                cre for add, rem/remove for del, exec for rpc
   var=val                 - leaf name and value to be set on the selected object. Relevant for edit-config and RPC
                               operations.
   LIST_ITEMS              - values to be added/deleted on the selected list (array), enclosed in square brackets,
@@ -114,6 +123,15 @@ ${cyan('Examples:')}
 
   Subscribe to notifications:
       ${green(`${exe} localhost sub /`)}
+
+  Set a leaf through the candidate datastore, committing it in the same session:
+      ${green(`${exe} --candidate --commit localhost '/system/config/hostname' hostname=router1`)}
+
+  Stage two changes in the candidate datastore, then commit (or drop) them:
+      ${green(`${exe} --candidate localhost '/system/config' hostname=router1
+      ${exe} --candidate localhost '/system/config' domain=example.com
+      ${exe} localhost com`)}
+      ${green(`${exe} localhost dis`)}   ${green('# to drop the staged changes instead')}
 
 
 ${cyan('Environment Variables:')}

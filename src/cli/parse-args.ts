@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import * as getoptsImport from 'getopts';
 import * as packageJson from '../../package.json' with { type: 'json' };
-import { GetDataResultType, NamespaceType, NetconfType, SafeAny, SSH_TIMEOUT } from '../lib/index.ts';
+import { GetDataResultType, NamespaceType, NetconfDatastore, NetconfType, SafeAny, SSH_TIMEOUT } from '../lib/index.ts';
 import { showHelp } from './help.ts';
 import { Output } from './output.ts';
 import { ConnArgs, parseConnStr } from './parse-conn-str.ts';
@@ -45,6 +45,10 @@ const OPERATION_ALIASES = {
   subscribe: 'subscribe',
   rpc: 'rpc',
   exec: 'rpc',
+  com: 'commit',
+  commit: 'commit',
+  dis: 'discard',
+  discard: 'discard',
 } as const;
 
 export enum OperationType {
@@ -80,6 +84,14 @@ export enum OperationType {
    * arbitrary rpc exec
    */
   RPC = 'rpc',
+  /**
+   * commit the candidate datastore
+   */
+  COMMIT = 'commit',
+  /**
+   * discard the changes collected in the candidate datastore
+   */
+  DISCARD = 'discard',
 }
 
 /**
@@ -244,7 +256,9 @@ type Operation =
   | { type: OperationType.DELETE, options: DeleteOptions }
   | { type: OperationType.REPLACE, options: ReplaceOptions }
   | { type: OperationType.SUBSCRIBE, options: SubscribeOptions }
-  | { type: OperationType.RPC, options: RpcOptions };
+  | { type: OperationType.RPC, options: RpcOptions }
+  | { type: OperationType.COMMIT }
+  | { type: OperationType.DISCARD };
 
 export enum ResultFormat {
   JSON = 'json',
@@ -301,6 +315,16 @@ export interface CliOptions {
    * Time in milliseconds to wait for the server
    */
   timeout?: number;
+
+  /**
+   * Datastore that edit-config writes to
+   */
+  datastore?: NetconfDatastore;
+
+  /**
+   * Commit the candidate datastore once the edit-config succeeded
+   */
+  autoCommit?: boolean;
 
   /**
    * Operation to be performed
@@ -362,6 +386,8 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       agent: false,
       allowmultiple: false,
       beforekey: undefined,
+      candidate: false,
+      commit: false,
       configonly: false,
       fulltree: false,
       host: undefined,
@@ -385,7 +411,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     },
     // eslint-disable-next-line id-denylist
     boolean: [
-      'agent', 'allowmultiple', 'configonly', 'fulltree', 'help', 'json', 'keyvalue', 'read-only', 'schemaonly',
+      'agent', 'allowmultiple', 'candidate', 'commit', 'configonly', 'fulltree', 'help', 'json', 'keyvalue', 'read-only', 'schemaonly',
       'shownamespaces', 'stateonly', 'stdin', 'version', 'verbose', 'xml', 'yaml', 'hello',
     ],
     unknown: (optionName: string): boolean => {
@@ -506,6 +532,18 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     ? timeoutOption(opt.timeout, '--timeout')
     : timeoutOption(process.env.NETCONF_TIMEOUT, 'NETCONF_TIMEOUT');
 
+  // Datastore that edit-config writes to. --candidate leaves the changes in the candidate datastore,
+  // adding --commit applies them to the running configuration once the edit-config succeeded.
+  // Committing without editing is the 'com' operation, not a flag
+  if(opt.commit && !opt.candidate){
+    throw new Error(
+      '--commit requires --candidate: use "--candidate --commit" to edit the candidate and commit it, '
+      + 'or the "com" operation to commit without editing'
+    );
+  }
+  const datastore: NetconfDatastore | undefined = opt.candidate ? 'candidate' : undefined;
+  const autoCommit = Boolean(opt.commit);
+
 
   // Determine the operation type to be performed
   if(opt.hello){
@@ -616,6 +654,8 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
         values: keyValuePairs,
       },
     }),
+    [OperationType.COMMIT]: () => ({ type: OperationType.COMMIT }),
+    [OperationType.DISCARD]: () => ({ type: OperationType.DISCARD }),
   };
 
   const operation = operationMap[operationType](xpath);
@@ -669,6 +709,8 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     passphrase,
     agent,
     timeout,
+    datastore,
+    autoCommit,
     operation,
     namespaces,
     readOnly: opt['read-only'],

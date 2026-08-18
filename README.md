@@ -311,6 +311,12 @@ See the Library and CLI tool source code for more advanced usage examples.
     the netconf channel, to send its hello, to reply to a request and to close the session. It defaults to
     `SSH_TIMEOUT` (20000) and does not limit how long a subscription waits for notifications.
 
+    `datastore` selects what the edit-config methods write to. With `'candidate'` the changes are collected in
+    the candidate datastore and are not applied until `.commit()` is called; the server has to advertise the
+    `:candidate` capability. It defaults to `'running'`, and it does not affect reads — `.getData()` always
+    reads the operational datastore. On the command line this is `--candidate`, with `--candidate --commit` to
+    edit the candidate and commit it in one invocation.
+
     Note that the connection to the server is lazy-loaded and won't be established until you invoke a method
     on the instance.
 
@@ -378,6 +384,22 @@ See the Library and CLI tool source code for more advanced usage examples.
 - `.editConfigDeleteListItems(xpath: string, listItems: string[]): Observable<EditConfigResult>`
 
     Deletes a list item in the configuration.
+
+- `.commit(): Observable<RpcResult>`
+
+    Commit the candidate datastore, applying the changes collected there to the running configuration. Only
+    meaningful with `datastore: 'candidate'`.
+
+    ```typescript
+    const netconf = new Netconf({host: 'localhost', port: 2022, user: 'admin', pass: 'admin', datastore: 'candidate'});
+    await firstValueFrom(netconf.editConfigMerge('//system/config', {hostname: 'router1'}));
+    await firstValueFrom(netconf.commit());
+    ```
+
+- `.discardChanges(): Observable<RpcResult>`
+
+    Discard the changes collected in the candidate datastore, reverting it to the contents of the running
+    configuration.
 
 - `.subscription(xpathOrStream: SubscriptionOption, stop$?: Subject<void>):
    Observable<NotificationResult | RpcResult | undefined>`

@@ -107,7 +107,10 @@ export class NetconfClient {
       }
       if(this.netconfChannelSubject$.getValue().state === 'closed'){
         this.debug('netconfChannelSubject$ is closed', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
-        return throwError(() => new Error('Trying to use connection that was closed after an error'));
+        // Name the error that closed the connection. It is the only report of it that a request
+        // started after the teardown gets, the requests that were in flight got it from the map below
+        const cause = this.channelError ? `: ${this.channelError.message}` : '';
+        return throwError(() => new Error(`Trying to use connection that was closed after an error${cause}`));
       }
       if(this.netconfChannelSubject$.getValue().state === 'uninitialized'){
         if(this.params.pass === undefined && !this.params.privateKey && !this.params.agent){

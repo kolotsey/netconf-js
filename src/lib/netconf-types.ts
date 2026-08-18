@@ -5,6 +5,11 @@
 export const SSH_TIMEOUT = 20000;
 
 /**
+ * Datastore that edit-config writes to
+ */
+export type NetconfDatastore = 'running' | 'candidate';
+
+/**
  * Choice of what to request from the server
  */
 export enum GetDataResultType {
@@ -61,6 +66,15 @@ export interface NetconfParams {
    * environment variable.
    */
   agent?: string;
+  /**
+   * Datastore that edit-config writes to. With 'candidate' the changes are collected in the
+   * candidate datastore and are not applied to the running configuration until `commit()` is
+   * called, or dropped by `discardChanges()`. The server must advertise the :candidate capability.
+   * Defaults to 'running'.
+   *
+   * Read operations are not affected: `getData()` always reads the operational datastore.
+   */
+  datastore?: NetconfDatastore;
   /**
    * Time in milliseconds the client waits for the server: to accept the ssh connection, to open the
    * netconf channel, to send its hello, to reply to a request and to close the session. It does not

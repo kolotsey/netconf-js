@@ -1,12 +1,26 @@
 #!/usr/bin/env node
 
-import { firstValueFrom, NEVER, Observable, of, Subject, timer } from 'rxjs';
+import { firstValueFrom, MonoTypeOperatorFunction, NEVER, Observable, of, Subject, timer } from 'rxjs';
 import { defaultIfEmpty, filter, map, switchMap, takeUntil, tap } from 'rxjs/operators';
-import { Netconf, NetconfType, NotificationResult, Result, RpcResult, SSH_TIMEOUT } from '../lib/index.ts';
+import { EditConfigResult, Netconf, NetconfType, NotificationResult, Result, RpcResult, SSH_TIMEOUT } from '../lib/index.ts';
 import { catchMultipleEditError, setEditConfigStatus, setRpcConfigStatus, writeData } from './output-operators.ts';
 import { Output } from './output.ts';
 import { CliOptions, OperationType, parseArgs } from './parse-args.ts';
 import { resolveXPath } from './resolve-xpath.ts';
+
+/**
+ * RxJs operator - commit the candidate datastore once the edit-config succeeded. The result of the
+ * edit-config is passed through, so that a failing commit is reported before it is announced as done.
+ *
+ * @param client - The netconf client
+ * @param commit - Whether the candidate has to be committed
+ * @returns An operator that commits the candidate and passes the edit-config result through
+ */
+function commitCandidate(client: Netconf, commit?: boolean): MonoTypeOperatorFunction<EditConfigResult> {
+  return switchMap((result: EditConfigResult) => commit
+    ? client.commit().pipe(map(() => result))
+    : of(result));
+}
 
 /**
  * Execute the requested netconf operation
@@ -56,6 +70,7 @@ function execNetconfOperation(client: Netconf, cliOptions: CliOptions): Observab
     const mergeOptions = cliOptions.operation.options;
     return client.editConfigMerge(mergeOptions.xpath, mergeOptions.values ?? {}).pipe(
       catchMultipleEditError(),
+      commitCandidate(client, cliOptions.autoCommit),
       setEditConfigStatus(),
       writeData(cliOptions.resultFormat),
       switchMap(() => client.connectionState === 'uninitialized' ? of(void 0) : client.close()),
@@ -69,6 +84,7 @@ function execNetconfOperation(client: Netconf, cliOptions: CliOptions): Observab
 
     return operation.pipe(
       catchMultipleEditError(),
+      commitCandidate(client, cliOptions.autoCommit),
       setEditConfigStatus(),
       writeData(cliOptions.resultFormat),
       switchMap(() => client.connectionState === 'uninitialized' ? of(void 0) : client.close()),
@@ -83,6 +99,7 @@ function execNetconfOperation(client: Netconf, cliOptions: CliOptions): Observab
 
     return operation.pipe(
       catchMultipleEditError(),
+      commitCandidate(client, cliOptions.autoCommit),
       setEditConfigStatus(),
       writeData(cliOptions.resultFormat),
       switchMap(() => client.connectionState === 'uninitialized' ? of(void 0) : client.close()),
@@ -97,11 +114,26 @@ function execNetconfOperation(client: Netconf, cliOptions: CliOptions): Observab
 
     return operation.pipe(
       catchMultipleEditError(),
+      commitCandidate(client, cliOptions.autoCommit),
       setEditConfigStatus(),
       writeData(cliOptions.resultFormat),
       switchMap(() => client.connectionState === 'uninitialized' ? of(void 0) : client.close()),
     );
   }
+
+  case OperationType.COMMIT:
+    return client.commit().pipe(
+      setRpcConfigStatus(),
+      writeData(cliOptions.resultFormat),
+      switchMap(() => client.close()),
+    );
+
+  case OperationType.DISCARD:
+    return client.discardChanges().pipe(
+      setRpcConfigStatus(),
+      writeData(cliOptions.resultFormat),
+      switchMap(() => client.close()),
+    );
 
   case OperationType.SUBSCRIBE:
     const subscribeOptions = cliOptions.operation.options;
@@ -159,6 +191,7 @@ async function main(): Promise<void> {
     passphrase: cliOptions.passphrase,
     agent: cliOptions.agent,
     timeout: cliOptions.timeout,
+    datastore: cliOptions.datastore,
     ignoreAttrs: !showNamespaces,
     readOnly: cliOptions.readOnly,
     allowMultipleEdit,
