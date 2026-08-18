@@ -22,7 +22,10 @@
   "scripts": {
     "test": "vitest",
     "lint": "eslint . --ext .ts",
-    "build": "tsc"
+    "build": "tsc",
+    "bun:libc": "bun build --compile --minify --sourcemap --bytecode --outfile netconf ./src/cli/main.ts",
+    "bun:musl": "bun build --compile --minify --sourcemap --bytecode --target bun-linux-x64-musl --outfile netconf-musl ./src/cli/main.ts",
+    "bun": "npm run bun:libc && npm run bun:musl"
   },
   "author": "Sergey Kolotsey",
   "license": "MIT",
