@@ -11,13 +11,30 @@ export const DEFAULT_PASS = 'admin';
 export const DEFAULT_PORT = 2022;
 export const DEFAULT_XPATH = '/';
 
+/**
+ * Accepted spellings of the operation keyword. Every alias must be listed in full: the keyword is
+ * matched against the whole argument, because matching a prefix turns a host name into an operation
+ * (`subnet.example.com` starts with `sub`) and a mistyped keyword into a destructive one
+ * (`deleteme` starts with `del`).
+ */
 const OPERATION_ALIASES = {
+  get: 'get',
+  upd: 'merge',
+  update: 'merge',
+  set: 'merge',
+  mer: 'merge',
+  merge: 'merge',
   add: 'create',
   cre: 'create',
-  rem: 'delete',
+  create: 'create',
   del: 'delete',
+  delete: 'delete',
+  rem: 'delete',
+  remove: 'delete',
   rep: 'replace',
+  replace: 'replace',
   sub: 'subscribe',
+  subscribe: 'subscribe',
   rpc: 'rpc',
   exec: 'rpc',
 } as const;
@@ -380,8 +397,9 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
   args = opt._.filter(arg => arg !== '');
   while (args.length) {
     // Operation
-    const op = args[0].substring(0, 3).toLowerCase();
-    if (op in OPERATION_ALIASES) {
+    const op = args[0].toLowerCase();
+    // hasOwn, not `in`: `in` also matches the inherited properties of Object (`constructor`, ...)
+    if (Object.hasOwn(OPERATION_ALIASES, op)) {
       const normalizedOp = OPERATION_ALIASES[op as keyof typeof OPERATION_ALIASES];
       operationType = normalizedOp as OperationType;
       args.shift();
@@ -571,6 +589,12 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       }
     }
   });
+
+  // Fall back to the namespace from the environment. Command line --xmlns flags take precedence,
+  // the same way they do for the connection arguments
+  if(!namespaces.length && process.env.NETCONF_NAMESPACE){
+    namespaces.push(process.env.NETCONF_NAMESPACE);
+  }
 
   const cliOptions: CliOptions = {
     host: connArgs.host,

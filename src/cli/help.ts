@@ -38,6 +38,7 @@ ${cyan('Flags:')}
   -h, --help              - this help
   -H, --host              - Netconf host
   -j, --json              - print result in JSON format
+  -k, --key-value         - print result as XPATH=value pairs, one per line
   -P, --password          - password (default: ${DEFAULT_PASS})
   -p, --port              - Netconf port number (default: ${DEFAULT_PORT})
       --read-only         - only read the data from the server, no edit-config operations
@@ -61,13 +62,17 @@ ${cyan('Flags:')}
   CONN_STR                - remote host connection string in the form of user:pass@host:port
   XPATH                   - XPath filter, must start with / (default: ${DEFAULT_XPATH})
   upd|add|del|rep|sub|rpc - operation to be performed (default: get)
-                              upd: edit-config with ${bold('merge')} operation, key is required (default)                          
+                              get: ${bold('get')} the data matching the XPath
+                              upd: edit-config with ${bold('merge')} operation, key is required
                               add: edit-config with ${bold('create')} operation, key is required
                               del: edit-config with ${bold('delete')} operation, key is required
                               rep: edit-config with ${bold('replace')} operation, key is required
                               sub: ${bold('subscribe')} to notifications
                               rpc: execute a Netconf ${bold('RPC')}; provide RPC command as XPath ${bold('without wildcards')}
                               N.B.: If no operation is provided, ${bold('get')} and ${bold('merge')} are assumed
+                              N.B.: Each keyword can also be spelled out in full (update, create, delete,
+                                replace, subscribe). Accepted aliases: set/mer/merge for upd, cre for add,
+                                rem/remove for del, exec for rpc
   var=val                 - leaf name and value to be set on the selected object. Relevant for edit-config and RPC
                               operations.
   LIST_ITEMS              - values to be added/deleted on the selected list (array), enclosed in square brackets,
@@ -104,6 +109,6 @@ ${cyan('Environment Variables:')}
   NETCONF_USER - Netconf user
   NETCONF_PASS - Netconf password
   NETCONF_PORT - Netconf port
-  NETCONF_NAMESPACE - Netconf namespace
+  NETCONF_NAMESPACE - Netconf namespace, used when no --xmlns flag is provided
 `);
 }
