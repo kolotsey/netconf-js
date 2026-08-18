@@ -89,6 +89,9 @@ export class NetconfClient {
    */
   private netconfChannelSubject$? = new BehaviorSubject<ClientChannelState>({ state: 'uninitialized' });
 
+  /** Time in milliseconds to wait for the server, see NetconfParams.timeout */
+  private readonly timeout: number;
+
   /**
    * The error that closed the connection, stored by handleError.
    * The connection subject itself is never put into the error state, otherwise
@@ -131,7 +134,7 @@ export class NetconfClient {
             privateKey: this.params.privateKey,
             passphrase: this.params.passphrase,
             agent: this.params.agent,
-            readyTimeout: SSH_TIMEOUT,
+            readyTimeout: this.timeout,
             debug: (message: string): void => this.debug(message, SSH_DEBUG_TAG, SSH_DEBUG_LEVEL),
           });
         }catch(err){
@@ -159,6 +162,7 @@ export class NetconfClient {
    */
   public constructor(params: NetconfParams) {
     this.params = params;
+    this.timeout = this.params.timeout ?? SSH_TIMEOUT;
     this.defaultIgnoreAttrs = this.params.ignoreAttrs;
     this.xmlBuilder = new xml2js.Builder(this.xmlBuilderOptions);
     // this.xmlParser = new xml2js.Parser(this.xmlParserOptions);
@@ -236,7 +240,7 @@ export class NetconfClient {
             // switchMap(() => channelClosed$),
             take(1),
             timeout({
-              each: SSH_TIMEOUT,
+              each: this.timeout,
               with: () => of(void 0),
             }),
             map(() =>  void 0),
@@ -275,7 +279,7 @@ export class NetconfClient {
             return of(void 0);
           }),
           timeout({
-            each: SSH_TIMEOUT,
+            each: this.timeout,
             with: () => {
               sessionClosedEvent();
               return throwError(() => new Error('Timeout closing SSH session'));
@@ -387,7 +391,7 @@ export class NetconfClient {
       // A missing reply means the session is unusable, so tear it down. Errors reported by the server
       // (rpc-error) or raised while parsing a reply fail only this request, the connection stays usable.
       timeout({
-        first: SSH_TIMEOUT,
+        first: this.timeout,
         with: () => {
           const err = new Error('Timeout sending request');
           this.handleError(err);
@@ -498,7 +502,7 @@ export class NetconfClient {
     this.debug('SSH session ready', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
     this.debug('Opening Netconf channel', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
     this.sshClient?.subsys('netconf', this.channelReady);
-    timer(SSH_TIMEOUT).pipe(
+    timer(this.timeout).pipe(
       takeUntil(this.helloDataSubject$.pipe(filter(Boolean))),
     ).subscribe(() => {
       this.debug('Timeout waiting for HELLO', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);

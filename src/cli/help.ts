@@ -1,6 +1,6 @@
 import { basename } from 'path';
 import { bold, cyan, green } from './output-colors.ts';
-import { DEFAULT_PASS, DEFAULT_PORT, DEFAULT_USER, DEFAULT_XPATH } from './parse-args.ts';
+import { DEFAULT_PASS, DEFAULT_PORT, DEFAULT_TIMEOUT, DEFAULT_USER, DEFAULT_XPATH } from './parse-args.ts';
 
 export function showHelp(): void {
   /**
@@ -54,6 +54,9 @@ ${cyan('Flags:')}
       --stdin             - read key-value pairs for edit-config operations from stdin instead of list of arguments;
                               the key-value pairs are expected to be in the format of key=value, one per line;
                               provide nested properties separated by /, for example: leaf/subleaf=value
+      --timeout           - seconds to wait for the server: to accept the connection, to send its hello and
+                              to reply to a request (default: ${DEFAULT_TIMEOUT}). Notifications of a subscription are
+                              awaited indefinitely and are not affected.
   -U, --user              - username (default: ${DEFAULT_USER})
   -v, --version           - version of the script
   -V, --verbose           - verbose output, use multiple times for more verbosity
@@ -122,5 +125,6 @@ ${cyan('Environment Variables:')}
   NETCONF_IDENTITY - path to the private key file, used when no --identity flag is provided
   NETCONF_PASSPHRASE - passphrase of the private key, used when no --passphrase flag is provided
   SSH_AUTH_SOCK - socket of the ssh agent, used by --agent
+  NETCONF_TIMEOUT - seconds to wait for the server, used when no --timeout flag is provided
 `);
 }

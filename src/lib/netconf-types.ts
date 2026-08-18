@@ -1,3 +1,7 @@
+/**
+ * Default time in milliseconds the client waits for the server, used when `NetconfParams.timeout`
+ * is not provided.
+ */
 export const SSH_TIMEOUT = 20000;
 
 /**
@@ -57,6 +61,12 @@ export interface NetconfParams {
    * environment variable.
    */
   agent?: string;
+  /**
+   * Time in milliseconds the client waits for the server: to accept the ssh connection, to open the
+   * netconf channel, to send its hello, to reply to a request and to close the session. It does not
+   * limit how long a subscription waits for notifications. Defaults to `SSH_TIMEOUT`.
+   */
+  timeout?: number;
   /**
    * Do not include namespaces in the result.
    * All namespaces, as well as other data that comes in attributes in the result xml,

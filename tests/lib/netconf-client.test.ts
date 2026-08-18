@@ -2,7 +2,7 @@
 import { firstValueFrom, Observable, Subject } from 'rxjs';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { NetconfClient } from '../../src/lib/netconf-client';
-import { CreateSubscriptionRequest, NetconfType, NotificationResult, RpcReply, SafeAny } from '../../src/lib/index.ts';
+import { CreateSubscriptionRequest, NetconfType, NotificationResult, RpcReply, SafeAny, SSH_TIMEOUT } from '../../src/lib/index.ts';
 
 // Mock ssh2 Client
 const mockOn = vi.fn();
@@ -129,6 +129,47 @@ describe('NetconfClient', () => {
         privateKey: 'encrypted-key-content',
       });
       await expect(firstValueFrom(keyClient.hello())).rejects.toThrow('Cannot parse privateKey');
+    });
+  });
+
+  describe('timeout', () => {
+    test('use the default timeout when none is configured', () => {
+      const sub = client.hello().subscribe({ error: () => {} });
+      expect(mockConnect).toHaveBeenCalledWith(expect.objectContaining({ readyTimeout: SSH_TIMEOUT }));
+      sub.unsubscribe();
+    });
+
+    test('pass the configured timeout to the ssh client', () => {
+      const slowClient = new NetconfClientTest({
+        host: 'test-host',
+        port: 830,
+        user: 'test-user',
+        pass: 'test-pass',
+        timeout: 90000,
+      });
+      const sub = slowClient.hello().subscribe({ error: () => {} });
+      expect(mockConnect).toHaveBeenCalledWith(expect.objectContaining({ readyTimeout: 90000 }));
+      sub.unsubscribe();
+    });
+
+    test('fail a request that gets no reply within the configured timeout', async () => {
+      vi.useFakeTimers();
+      try{
+        const slowClient = new NetconfClientTest({
+          host: 'test-host',
+          port: 830,
+          user: 'test-user',
+          pass: 'test-pass',
+          timeout: 5000,
+        });
+        // The channel never becomes ready, so nothing answers the request
+        const failure = firstValueFrom(slowClient.rpcExec({ 'get-config': null })).catch((e: Error) => e);
+        await vi.advanceTimersByTimeAsync(4999);
+        await vi.advanceTimersByTimeAsync(2);
+        expect(await failure).toEqual(new Error('Timeout sending request'));
+      }finally{
+        vi.useRealTimers();
+      }
     });
   });
 

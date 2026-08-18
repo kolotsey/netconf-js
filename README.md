@@ -307,6 +307,10 @@ See the Library and CLI tool source code for more advanced usage examples.
     ```
     At least one of `pass`, `privateKey` or `agent` is required.
 
+    `timeout` sets how long, in milliseconds, the client waits for the server: to accept the connection, to open
+    the netconf channel, to send its hello, to reply to a request and to close the session. It defaults to
+    `SSH_TIMEOUT` (20000) and does not limit how long a subscription waits for notifications.
+
     Note that the connection to the server is lazy-loaded and won't be established until you invoke a method
     on the instance.
 

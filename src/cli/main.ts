@@ -111,7 +111,7 @@ function execNetconfOperation(client: Netconf, cliOptions: CliOptions): Observab
       Output.info('\nStopping subscription');
       stop$.next();
       stop$.complete();
-      await firstValueFrom(timer(SSH_TIMEOUT).pipe(
+      await firstValueFrom(timer(cliOptions.timeout ?? SSH_TIMEOUT).pipe(
         takeUntil(closed$),
         defaultIfEmpty(void 0),
       ));
@@ -158,6 +158,7 @@ async function main(): Promise<void> {
     privateKey: cliOptions.privateKey,
     passphrase: cliOptions.passphrase,
     agent: cliOptions.agent,
+    timeout: cliOptions.timeout,
     ignoreAttrs: !showNamespaces,
     readOnly: cliOptions.readOnly,
     allowMultipleEdit,

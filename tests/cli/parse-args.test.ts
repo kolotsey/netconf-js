@@ -355,6 +355,61 @@ describe('parse arguments', () => {
   });
 });
 
+describe('timeout', () => {
+  test.each([
+    ['30', 30000],
+    ['0.5', 500],
+    ['1', 1000],
+  ])('parse --timeout %s as %i milliseconds', async (option, expected) => {
+    process.argv = ['node', 'netconf', 'localhost', '--timeout', option];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ timeout: expected }));
+  });
+
+  test('no timeout in the options when the flag is not provided, so the library default applies', async () => {
+    process.argv = ['node', 'netconf', 'localhost'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ timeout: undefined }));
+  });
+
+  test('take the timeout from NETCONF_TIMEOUT', async () => {
+    vi.stubEnv('NETCONF_TIMEOUT', '45');
+    process.argv = ['node', 'netconf', 'localhost'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ timeout: 45000 }));
+  });
+
+  test('--timeout overrides NETCONF_TIMEOUT', async () => {
+    vi.stubEnv('NETCONF_TIMEOUT', '45');
+    process.argv = ['node', 'netconf', 'localhost', '--timeout', '10'];
+    expect(await parseArgs()).toEqual(expect.objectContaining({ timeout: 10000 }));
+  });
+
+  test.each([
+    [['--timeout', '0']],
+    [['--timeout', 'abc']],
+    [['--timeout', 'Infinity']],
+    // A negative value has to use "=", getopts reads "--timeout -5" as the short option -5
+    [['--timeout=-5']],
+  ])('error on an invalid timeout "%s"', async args => {
+    process.argv = ['node', 'netconf', 'localhost', ...args];
+    await expect(parseArgs()).rejects.toThrow('--timeout requires a positive number of seconds');
+  });
+
+  test('error on an invalid NETCONF_TIMEOUT', async () => {
+    vi.stubEnv('NETCONF_TIMEOUT', 'soon');
+    process.argv = ['node', 'netconf', 'localhost'];
+    await expect(parseArgs()).rejects.toThrow('NETCONF_TIMEOUT requires a positive number of seconds');
+  });
+
+  test('error when --timeout is provided without a value', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '--timeout'];
+    await expect(parseArgs()).rejects.toThrow('--timeout requires a value');
+  });
+
+  test('error when --timeout is provided more than once', async () => {
+    process.argv = ['node', 'netconf', 'localhost', '--timeout', '10', '--timeout', '20'];
+    await expect(parseArgs()).rejects.toThrow('--timeout provided more than once');
+  });
+});
+
 describe('public key authentication', () => {
   const KEY_CONTENT = '-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-real-key\n-----END OPENSSH PRIVATE KEY-----\n';
   let dir: string;

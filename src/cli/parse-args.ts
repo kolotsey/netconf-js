@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import * as getoptsImport from 'getopts';
 import * as packageJson from '../../package.json' with { type: 'json' };
-import { GetDataResultType, NamespaceType, NetconfType, SafeAny } from '../lib/index.ts';
+import { GetDataResultType, NamespaceType, NetconfType, SafeAny, SSH_TIMEOUT } from '../lib/index.ts';
 import { showHelp } from './help.ts';
 import { Output } from './output.ts';
 import { ConnArgs, parseConnStr } from './parse-conn-str.ts';
@@ -13,6 +13,11 @@ export const DEFAULT_USER = 'admin';
 export const DEFAULT_PASS = 'admin';
 export const DEFAULT_PORT = 2022;
 export const DEFAULT_XPATH = '/';
+
+const MS_IN_SECOND = 1000;
+
+/** Default value of --timeout, in seconds */
+export const DEFAULT_TIMEOUT = SSH_TIMEOUT / MS_IN_SECOND;
 
 /**
  * Accepted spellings of the operation keyword. Every alias must be listed in full: the keyword is
@@ -293,6 +298,11 @@ export interface CliOptions {
   agent?: string;
 
   /**
+   * Time in milliseconds to wait for the server
+   */
+  timeout?: number;
+
+  /**
    * Operation to be performed
    */
   operation: Operation;
@@ -366,6 +376,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       schemaonly: false,
       stateonly: false,
       stdin: false,
+      timeout: undefined,
       user: undefined,
       shownamespaces: false,
       xml: false,
@@ -489,6 +500,11 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       throw new Error('--agent requires a running ssh agent, but the SSH_AUTH_SOCK environment variable is not set');
     }
   }
+
+  // How long to wait for the server. Given in seconds on the command line, kept in milliseconds
+  const timeout = opt.timeout !== undefined
+    ? timeoutOption(opt.timeout, '--timeout')
+    : timeoutOption(process.env.NETCONF_TIMEOUT, 'NETCONF_TIMEOUT');
 
 
   // Determine the operation type to be performed
@@ -652,6 +668,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     privateKey,
     passphrase,
     agent,
+    timeout,
     operation,
     namespaces,
     readOnly: opt['read-only'],
@@ -695,6 +712,31 @@ function stringOption(value: SafeAny, name: string): string | undefined {
     throw new Error(`Option ${name} requires a value`);
   }
   return value;
+}
+
+/**
+ * Parse a timeout given in seconds and convert it to milliseconds. getopts turns a numeric value
+ * into a number, while a value taken from the environment is a string, so both are accepted.
+ *
+ * @param value - The timeout in seconds, as parsed by getopts or taken from the environment
+ * @param name - The name of the option or of the environment variable, used in the error message
+ * @returns The timeout in milliseconds, or undefined if it was not provided
+ */
+function timeoutOption(value: SafeAny, name: string): number | undefined {
+  if(value === undefined || value === ''){
+    return undefined;
+  }
+  if(Array.isArray(value)){
+    throw new Error(`${name} provided more than once`);
+  }
+  if(typeof value === 'boolean'){
+    throw new Error(`${name} requires a value`);
+  }
+  const seconds = Number(value);
+  if(!Number.isFinite(seconds) || seconds <= 0){
+    throw new Error(`${name} requires a positive number of seconds`);
+  }
+  return seconds * MS_IN_SECOND;
 }
 
 /**
