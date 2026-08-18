@@ -451,6 +451,40 @@ describe('build from schema', () => {
     expect(targetObj).toEqual(sampleSchema);
   });
 
+  test('build config from schema with a primitive as last element', async () => {
+    const sampleSchema: any = {
+      ncc: {
+        $: {
+          xmlns: 'http://spacebridge.com/yang/ncc',
+        },
+        'network-operator': {
+          terminals: {
+            terminal: {
+              'mac-address': '00:09:ce:c0:06:8a',
+              'terminal-network-service-endpoints': {
+                'terminal-network-service-endpoint': {
+                  uuid: '29c86c81-5c33-417e-a0c5-f2b89405e7b2',
+                  'basic-L3-config': '',
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const builder = new NetconfBuildConfig('//terminal[mac-address="00:09:ce:c0:06:8a"]/terminal-network-service-endpoints/terminal-network-service-endpoint[uuid="29c86c81-5c33-417e-a0c5-f2b89405e7b2"]/basic-L3-config', of(sampleSchema));
+    const targetObj: NetconfType = {};
+
+    const result = await new Promise<NetconfType[]>(resolve => {
+      builder.build(targetObj).subscribe(resolve);
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result).toEqual([
+      {},
+    ]);
+  });
+
   test('handle deeply nested objects with multiple wildcards', async () => {
     const sampleSchema = {
       root: {
@@ -569,6 +603,94 @@ describe('build from schema', () => {
       str: 'value',
       num: 123,
       bool: true,
+    });
+  });
+
+  // Regression tests for the sibling-pruning bug: the delete guard in
+  // findConfigPartsInSchema() used to test the loop-accumulated `branchPassed` instead of a
+  // per-key result, so every sibling visited *after* the matching key survived pruning
+  // and was sent to the device inside edit-config. The guard now tests the per-key
+  // `twigPassed`, so a sibling is kept only if the xpath matched below that sibling itself.
+  test('prune non-matching sibling that comes after the matching branch', async () => {
+    const sampleSchema: any = {
+      root: {
+        alpha: { x: 'before the match' },
+        interfaces: {
+          interface: { name: 'eth0' },
+        },
+        zulu: { y: 'after the match' },
+      },
+    };
+    const builder = new NetconfBuildConfig('//interfaces/interface', of(sampleSchema));
+    const targetObj: NetconfType = {};
+
+    const result = await new Promise<NetconfType[]>(resolve => {
+      builder.build(targetObj).subscribe(resolve);
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({ name: 'eth0' });
+    // Both `alpha` (visited before the match) and `zulu` (visited after it) are pruned
+    expect(targetObj).toEqual({
+      root: {
+        interfaces: {
+          interface: { name: 'eth0' },
+        },
+      },
+    });
+  });
+
+  test('prune non-matching siblings regardless of key order', async () => {
+    const buildTarget = async (schema: any): Promise<NetconfType> => {
+      const targetObj: NetconfType = {};
+      await new Promise<NetconfType[]>(resolve => {
+        new NetconfBuildConfig('//interfaces/interface', of(schema)).build(targetObj).subscribe(resolve);
+      });
+      return targetObj;
+    };
+
+    const other = { system: { hostname: 'router1' } };
+    const interfaces = { interface: { name: 'eth0' } };
+
+    const matchFirst = await buildTarget({ root: { interfaces, other } });
+    const matchLast = await buildTarget({ root: { other, interfaces } });
+
+    expect(matchFirst).toEqual(matchLast);
+  });
+
+  test('prune every non-matching sibling of a deep match', async () => {
+    const sampleSchema: any = {
+      test: {
+        operator: {
+          terminals: {
+            terminal: { 'mac-address': '00:09:ce:c0:1d:d6' },
+          },
+          subscribers: {
+            subscriber: { id: '1' },
+          },
+          statistics: {
+            counters: { rx: '0', tx: '0' },
+          },
+        },
+      },
+    };
+    const builder = new NetconfBuildConfig('//terminals/terminal', of(sampleSchema));
+    const targetObj: NetconfType = {};
+
+    const result = await new Promise<NetconfType[]>(resolve => {
+      builder.build(targetObj).subscribe(resolve);
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({ 'mac-address': '00:09:ce:c0:1d:d6' });
+    expect(targetObj).toEqual({
+      test: {
+        operator: {
+          terminals: {
+            terminal: { 'mac-address': '00:09:ce:c0:1d:d6' },
+          },
+        },
+      },
     });
   });
 });

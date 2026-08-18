@@ -19,7 +19,7 @@ describe('writeData', () => {
   test('writes XML', async () => {
     const data = { xml: '<foo/>', result: { foo: 1 } };
     await firstValueFrom(of(data).pipe(writeData(ResultFormat.XML)));
-    expect(stdoutWrite).toHaveBeenCalledWith('<foo/>');
+    expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining('<foo/>'));
   });
 
   test('writes JSON', async () => {

@@ -1,4 +1,4 @@
-import { BehaviorSubject, catchError, combineLatest, EMPTY, filter, finalize, from, map, merge, NEVER, Observable, of, Subject, switchMap, take, takeUntil, tap, throwError, timeout, timer } from 'rxjs';
+import { BehaviorSubject, catchError, combineLatest, filter, finalize, from, map, merge, NEVER, Observable, of, Subject, switchMap, take, takeUntil, tap, throwError, timeout, timer } from 'rxjs';
 import { Client, ClientChannel } from 'ssh2';
 import * as xml2js from 'xml2js';
 import { NETCONF_DELIM, NetconfBuffer } from './netconf-buffer.ts';
@@ -23,7 +23,7 @@ const NOTIFICATION_REGEXP = new RegExp('<notification[\\s\\S]*</notification>');
 
 type ClientChannelState =
   | {
-      state: 'uninitialized' | 'connecting';
+      state: 'uninitialized' | 'connecting' | 'closed';
       channel?: undefined;
     }
   | {
@@ -89,11 +89,22 @@ export class NetconfClient {
    */
   private netconfChannelSubject$? = new BehaviorSubject<ClientChannelState>({ state: 'uninitialized' });
 
+  /**
+   * The error that closed the connection, stored by handleError.
+   * The connection subject itself is never put into the error state, otherwise
+   * getValue() would rethrow it and every later request would replay it.
+   */
+  private channelError?: Error;
+
   private netconfChannel$: Observable<ClientChannelState> = of(null).pipe(
     switchMap(() => {
       if(!this.netconfChannelSubject$){
         this.debug('netconfChannelSubject$ is undefined', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
         return throwError(() => new Error('Trying to use connection that was already closed'));
+      }
+      if(this.netconfChannelSubject$.getValue().state === 'closed'){
+        this.debug('netconfChannelSubject$ is closed', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+        return throwError(() => new Error('Trying to use connection that was closed after an error'));
       }
       if(this.netconfChannelSubject$.getValue().state === 'uninitialized'){
         this.debug(`Opening connection to ${this.params.user}@${this.params.host}:${this.params.port}`, NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
@@ -117,7 +128,16 @@ export class NetconfClient {
           debug: (message: string): void => this.debug(message, SSH_DEBUG_TAG, SSH_DEBUG_LEVEL),
         });
       }
-      return this.netconfChannelSubject$.asObservable().pipe(filter(Boolean));
+      return this.netconfChannelSubject$.asObservable().pipe(
+        filter(Boolean),
+        // Fail the requests that are in flight when the connection breaks
+        map((channelState: ClientChannelState) => {
+          if(channelState.state === 'closed'){
+            throw this.channelError ?? new Error('Netconf connection closed');
+          }
+          return channelState;
+        }),
+      );
     }),
   );
 
@@ -140,6 +160,13 @@ export class NetconfClient {
     }
     if (this.netconfChannelSubject$.getValue().state === 'uninitialized') {
       return throwError(() => new Error('Trying to close connection that was not opened'));
+    }
+    if (this.netconfChannelSubject$.getValue().state === 'closed') {
+      // handleError already destroyed the channel and the ssh session
+      this.debug('Closing connection that was closed after an error', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+      this.netconfChannelSubject$.complete();
+      this.netconfChannelSubject$ = undefined;
+      return of(void 0);
     }
     // Get the Netconf channel from observable (replayed value)
     return this.netconfChannel$.pipe(
@@ -170,6 +197,11 @@ export class NetconfClient {
           return throwError(() => new Error('Trying to close Netconf channel that was not initialized'));
         case 'connecting':
           this.debug('Closing Netconf channel that is being connected', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+          this.netconfChannelSubject$?.complete();
+          this.netconfChannelSubject$ = undefined;
+          return of(void 0);
+        case 'closed':
+          this.debug('Closing Netconf channel that was closed after an error', NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
           this.netconfChannelSubject$?.complete();
           this.netconfChannelSubject$ = undefined;
           return of(void 0);
@@ -304,10 +336,6 @@ export class NetconfClient {
           }
         }
       }),
-      catchError((err: Error) => {
-        this.handleError(err);
-        return EMPTY;
-      })
     );
   }
 
@@ -343,14 +371,16 @@ export class NetconfClient {
       switchMap(([messageId, xml]) => this.sendXml(xml, messageId, stop$, ignoreAttrs)),
       // Timeout only for the first request. All subsequent requests (in case of awaitNotifications) are notifications
       // and can be received for a long time.
+      // A missing reply means the session is unusable, so tear it down. Errors reported by the server
+      // (rpc-error) or raised while parsing a reply fail only this request, the connection stays usable.
       timeout({
         first: SSH_TIMEOUT,
-        with: () => throwError(() => new Error('Timeout sending request')),
+        with: () => {
+          const err = new Error('Timeout sending request');
+          this.handleError(err);
+          return throwError(() => err);
+        },
       }),
-      catchError(err => {
-        this.handleError(err);
-        return throwError(() => err);
-      })
     );
   }
 
@@ -387,12 +417,7 @@ export class NetconfClient {
 
           replyReceived = true;
 
-          this.parseXml(message, ignoreAttrs).pipe(
-            catchError((err: Error) => {
-              this.handleError(err);
-              return EMPTY;
-            })
-          ).subscribe({
+          this.parseXml(message, ignoreAttrs).subscribe({
             next: ({parsed, original}) => {
               replySubject.next({ xml: original, result: parsed as { 'rpc-reply': RpcReplyType } });
               if(!stop$){
@@ -400,6 +425,11 @@ export class NetconfClient {
               }else{
                 this.debug('Waiting for notifications', NETCONF_DEBUG_TAG, NETCONF_DATA_DEBUG_LEVEL);
               }
+            },
+            // Fail this request only, the connection stays usable
+            error: (err: Error) => {
+              this.debug(`Request failed, message-id=${messageId}: ${err.message}`, NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+              replySubject.error(err);
             },
           });
           if(!stop$){
@@ -438,6 +468,11 @@ export class NetconfClient {
           rcvBuffer.clear();
         }
         return data;
+      }),
+      // The request can also end without reaching the map above (error or unsubscribe)
+      finalize(() => {
+        this.netconfChannelSubject$?.getValue().channel?.removeListener('data', dataEventHandler);
+        rcvBuffer.clear();
       }),
     );
   }
@@ -486,6 +521,11 @@ export class NetconfClient {
 
   /** Clean up on error and send the error to the connection subject */
   private handleError(err: Error): void {
+    if(this.netconfChannelSubject$?.getValue().state === 'closed'){
+      // Already torn down by an earlier error, do not clean up or report twice
+      this.debug(`Ignoring error on a closed connection: ${err.message}`, NETCONF_DEBUG_TAG, NETCONF_DEBUG_LEVEL);
+      return;
+    }
     const channel = this.netconfChannelSubject$?.getValue().channel;
     if(channel){
       channel.removeAllListeners('close');
@@ -498,7 +538,8 @@ export class NetconfClient {
       this.sshClient.removeAllListeners('close');
       this.sshClient.destroy();
     }
-    this.netconfChannelSubject$?.error(err);
+    this.channelError = err;
+    this.netconfChannelSubject$?.next({ state: 'closed' });
   }
 
   /**

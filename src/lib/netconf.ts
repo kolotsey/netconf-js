@@ -509,7 +509,7 @@ export class Netconf extends NetconfClient{
 
   protected guessNamespace(xpath: string): Observable<string | undefined> {
     // get first XPath segment
-    const firstSegment = xpath.trim().replace('^//', '/').split('/').find(x => x !== '');
+    const firstSegment = xpath.trim().replace(/^\/\//, '/').split('/').find(x => x !== '');
     if(firstSegment === undefined){
       return of(undefined);
     }

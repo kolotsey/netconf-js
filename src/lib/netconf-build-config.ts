@@ -214,21 +214,27 @@ export class NetconfBuildConfig {
       for(const key of Object.keys(currentObj)){
         const isWildcardMatch = steps[0] === '*' && steps.length > 1 && key === steps[1];
 
-        // let twigPassed = false;
+        let twigPassed: boolean;
         if(key === steps[0] || isWildcardMatch){
           const newSteps = isWildcardMatch ? steps.slice(1) : steps;
-          // If this is out object, but it is an array, convert it to an object
+          // If this is our object, but it is an array, convert it to an object
           if(newSteps.length === 1 && Array.isArray(currentObj[key])){
             currentObj[key] = {};
+          // eslint-disable-next-line sonarjs/no-duplicated-branches
+          } else if (newSteps.length === 1 && typeof currentObj[key] === 'string' && currentObj[key] === '') {
+            currentObj[key] = {};
           }
-          branchPassed = searchSchema(currentObj[key] as NetconfType, newSteps.slice(1), step + 1) || branchPassed;
+          twigPassed = searchSchema(currentObj[key] as NetconfType, newSteps.slice(1), step + 1);
         }else if(steps[0] === '*' && steps.length === 1){
-          branchPassed = searchSchema(currentObj[key] as NetconfType, [], step + 1) || branchPassed;
+          twigPassed = searchSchema(currentObj[key] as NetconfType, [], step + 1);
         }else{
-          branchPassed = searchSchema(currentObj[key] as NetconfType, steps, step + 1) || branchPassed;
+          twigPassed = searchSchema(currentObj[key] as NetconfType, steps, step + 1);
         }
+        branchPassed = twigPassed || branchPassed;
 
-        if (!branchPassed && (Array.isArray(currentObj[key]) || typeof currentObj[key] === 'object') && key !== '$') {
+        // Prune this key if nothing below it matched the xpath. The check is per key: a sibling
+        // that matched must not keep the other, non-matching siblings in the configuration
+        if (!twigPassed && (Array.isArray(currentObj[key]) || typeof currentObj[key] === 'object') && key !== '$') {
           delete currentObj[key];
         }
       }

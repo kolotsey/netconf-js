@@ -6,6 +6,7 @@ import { yellow } from './output-colors.ts';
 import { Output } from './output.ts';
 import { ResultFormat } from './parse-args.ts';
 import { asTree } from 'object-as-tree';
+import * as xml2js from 'xml2js';
 
 /**
  * A helper class to manage EPIPE when writing to stdout
@@ -54,6 +55,34 @@ class Writer{
   }
 }
 
+/**
+ * Builder for the XML output format. Headless: a result stream (e.g. the notifications of a
+ * subscription) is written as a sequence of documents, and an XML header in front of every
+ * one of them would leave the stream unparseable
+ */
+const xmlBuilder = new xml2js.Builder({ headless: true });
+
+/**
+ * Pretty-print an XML document received from the server. The original XML is returned as is
+ * if it cannot be parsed or carries no document, so that the payload is never replaced by an
+ * error message on stdout. A parsing failure is reported on stderr.
+ *
+ * @param xml - The XML document received from the server
+ * @returns The pretty-printed document, or the original XML if it cannot be parsed
+ */
+function prettyXml(xml: string): string {
+  let pretty: string | undefined;
+  // parseString calls back synchronously for a string input
+  xml2js.parseString(xml, (err, result) => {
+    if(err){
+      Output.error(`Failed to parse the XML received from the server: ${err.message}`);
+    }else if(result){
+      pretty = xmlBuilder.buildObject(result);
+    }
+  });
+  return pretty ?? xml;
+}
+
 function formatPrimitive(val: SafeAny): string {
   if (typeof val === 'string') {
     if (val.includes('\n')) {
@@ -98,7 +127,7 @@ export function writeData(format: ResultFormat): MonoTypeOperatorFunction<Result
       : [input as Result, false];
     switch (format) {
     case ResultFormat.XML:
-      Writer.write(data.xml);
+      Writer.write(prettyXml(data.xml));
       Writer.write('\n');
       break;
 

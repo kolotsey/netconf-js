@@ -1,8 +1,8 @@
 /* eslint-disable max-lines-per-function */
-import { firstValueFrom, Observable } from 'rxjs';
+import { firstValueFrom, Observable, Subject } from 'rxjs';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { NetconfClient } from '../../src/lib/netconf-client';
-import { NetconfType, RpcReply, SafeAny } from '../../src/lib';
+import { CreateSubscriptionRequest, NetconfType, NotificationResult, RpcReply, SafeAny } from '../../src/lib/index.ts';
 
 // Mock ssh2 Client
 const mockOn = vi.fn();
@@ -28,6 +28,21 @@ vi.mock('ssh2', () => ({
 class NetconfClientTest extends NetconfClient {
   public rpcExec(rpc: NetconfType): Observable<RpcReply> {
     return super.rpcExec(rpc);
+  }
+
+  public rpcStream(
+    rpc: CreateSubscriptionRequest, stop$?: Subject<void>
+  ): Observable<NotificationResult | RpcReply> {
+    return super.rpcStream(rpc, stop$);
+  }
+}
+
+// Poll until the condition holds, failing with the given message on timeout
+async function waitFor(condition: () => boolean, message: string, timeoutMs = 100): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error(message);
+    await new Promise(r => setTimeout(r, 1));
   }
 }
 
@@ -326,6 +341,178 @@ describe('NetconfClient', () => {
       `));
 
       await expect(rpcPromise).rejects.toThrow('Netconf RPC error: Invalid operation');
+    });
+  });
+
+  describe('state after a connection error', () => {
+    let mockChannel: SafeAny;
+    let channelDataCallback: ((data: Buffer) => void) | undefined;
+    let sshCallbacks: Record<string, SafeAny>;
+
+    // Complete the hello handshake so the connection reaches the 'ready' state
+    async function connect(): Promise<void> {
+      const helloPromise = firstValueFrom(client.hello());
+
+      await waitFor(() => !!channelDataCallback, 'Timeout waiting for the hello listener');
+
+      channelDataCallback?.(Buffer.from(`
+        <hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <capabilities><capability>urn:ietf:params:xml:ns:netconf:base:1.0</capability></capabilities>
+          <session-id>123</session-id>
+        </hello>
+        ]]>]]>
+      `));
+
+      await helloPromise;
+    }
+
+    // Send a request that the server rejects with an rpc-error
+    async function failingRequest(): Promise<void> {
+      const rpcPromise: Promise<RpcReply> = firstValueFrom(client.rpcExec({ 'invalid-operation': {} }));
+
+      await waitFor(() => !!channelDataCallback, 'Timeout waiting for the rpc-reply listener');
+
+      channelDataCallback?.(Buffer.from(`
+        <rpc-reply message-id="1" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <rpc-error>
+            <error-type>protocol</error-type>
+            <error-tag>unknown-element</error-tag>
+            <error-severity>error</error-severity>
+            <error-message>Invalid operation</error-message>
+          </rpc-error>
+        </rpc-reply>
+        ]]>]]>
+      `));
+
+      await expect(rpcPromise).rejects.toThrow('Netconf RPC error: Invalid operation');
+    }
+
+    beforeEach(() => {
+      channelDataCallback = undefined;
+      sshCallbacks = {};
+
+      mockChannel = {
+        on: vi.fn((event: string, callback: (data: Buffer) => void) => {
+          if (event === 'data'){
+            channelDataCallback = callback;
+          }
+        }),
+        write: vi.fn((_data: Buffer, callback: () => void) => {
+          callback?.();
+        }),
+        removeListener: vi.fn((event: string) => {
+          if (event === 'data'){
+            channelDataCallback = undefined;
+          }
+        }),
+        removeAllListeners: vi.fn(),
+        destroy: vi.fn(),
+      };
+
+      // Store every ssh callback so the tests can simulate ssh events
+      mockOn.mockImplementation((event: string, callback: SafeAny) => {
+        sshCallbacks[event] = callback;
+        if (event === 'ready') {
+          setTimeout(() => callback(), 0);
+        }
+      });
+
+      mockSubsys.mockImplementation((_svc: string, callback: (err: Error | undefined, channel: SafeAny) => void) => {
+        setTimeout(() => callback(undefined, mockChannel), 0);
+      });
+    });
+
+    test('report "closed" instead of throwing when the ssh session drops', async () => {
+      expect(client.connectionState).toBe('uninitialized');
+
+      await connect();
+      expect(client.connectionState).toBe('ready');
+
+      // The ssh layer reports that the session went away
+      sshCallbacks.close();
+
+      expect(() => client.connectionState).not.toThrow();
+      expect(client.connectionState).toBe('closed');
+    });
+
+    test('report closing errors through the returned observable, not synchronously', async () => {
+      await connect();
+
+      sshCallbacks.close();
+
+      let close$: Observable<void> | undefined;
+      expect(() => {
+        close$ = client.close();
+      }).not.toThrow();
+
+      await expect(firstValueFrom(close$ as Observable<void>)).resolves.toBeUndefined();
+    });
+
+    test('keep the connection usable after the server rejects a request', async () => {
+      await connect();
+      await failingRequest();
+
+      // A protocol error concerns one request, it must not tear down the session
+      expect(client.connectionState).toBe('ready');
+      expect(mockChannel.destroy).not.toHaveBeenCalled();
+
+      const rpcPromise: Promise<RpcReply> = firstValueFrom(client.rpcExec({
+        'get-config': { source: { running: {} } },
+      }));
+
+      await waitFor(() => !!channelDataCallback, 'Timeout waiting for the rpc-reply listener');
+
+      channelDataCallback?.(Buffer.from(`
+        <rpc-reply message-id="2" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <data><foo>bar</foo></data>
+        </rpc-reply>
+        ]]>]]>
+      `));
+
+      const reply = await rpcPromise;
+      expect(reply.result['rpc-reply']).toHaveProperty('data');
+    });
+
+    test('release the data listener when a request fails', async () => {
+      await connect();
+      await failingRequest();
+
+      expect(channelDataCallback).toBeUndefined();
+    });
+
+    test('not replay a stale error on a request after the connection dropped', async () => {
+      await connect();
+
+      // The ssh layer reports that the session went away
+      sshCallbacks.close();
+
+      const error: Error | undefined = await firstValueFrom(client.rpcExec({
+        'get-config': { source: { running: {} } },
+      })).then(() => undefined, (err: Error) => err);
+
+      // The request reports the closed connection, not the error that closed it
+      expect(error?.message).toBe('Trying to use connection that was closed after an error');
+    });
+
+    test('report a rejected subscription instead of completing silently', async () => {
+      await connect();
+
+      const stop$ = new Subject<void>();
+      const streamPromise: Promise<NotificationResult | RpcReply> = firstValueFrom(client.rpcStream({
+        'create-subscription': {},
+      } as CreateSubscriptionRequest, stop$));
+
+      await waitFor(() => !!channelDataCallback, 'Timeout waiting for the rpc-reply listener');
+
+      // The server answers the subscription request without <ok/>
+      channelDataCallback?.(Buffer.from(`
+        <rpc-reply message-id="1" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <data/>
+        </rpc-reply>
+        ]]>]]>
+      `));
+
+      await expect(streamPromise).rejects.toThrow('Did not receive rpc-reply/ok in response to subscription');
     });
   });
 });

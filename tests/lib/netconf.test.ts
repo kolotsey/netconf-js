@@ -1,4 +1,4 @@
-import { firstValueFrom, Observable, of, Subject, tap } from 'rxjs';
+import { firstValueFrom, Observable, of, Subject, tap, throwError } from 'rxjs';
 import { describe, expect, test, vi } from 'vitest';
 import { CreateSubscriptionRequest, GetDataResultType, Netconf, NetconfParams, NetconfType, NotificationResult, RpcReply, RpcReplyType, SubscriptionOption } from '../../src/lib/index.ts';
 
@@ -15,6 +15,10 @@ class NetconfTest extends Netconf {
     request: CreateSubscriptionRequest, stop$?: Subject<void>
   ): Observable<NotificationResult | RpcReply> {
     return super.rpcStream(request, stop$);
+  }
+
+  public guessNamespace(xpath: string): Observable<string | undefined> {
+    return super.guessNamespace(xpath);
   }
 }
 
@@ -566,5 +570,78 @@ describe('fetchSchema', () => {
     await expect(
       firstValueFrom(instance.editConfigMerge('//foo/bar', {}))
     ).rejects.toThrow('Failed to fetch element matching the XPath from the server. No element to update.');
+  });
+});
+
+describe('guessNamespace', () => {
+  const options: NetconfParams = { host: 'localhost', port: 830, user: 'admin', pass: 'admin' };
+
+  // The leading slashes are dropped by split('/').find(x => x !== ''), which skips the empty
+  // segments an absolute or descendant XPath starts with. The replace(/^\/\//, '/') in front of
+  // it only makes that explicit: an XPath starting with "//", "/" or a bare name all yield the
+  // same first segment either way.
+  test.each([
+    ['//interfaces/interface', '/interfaces'],
+    ['/interfaces/interface', '/interfaces'],
+    ['interfaces/interface', '/interfaces'],
+    ['//interfaces', '/interfaces'],
+    ['  //interfaces/interface  ', '/interfaces'],
+    ['//interfaces/interface[name="eth0"]', '/interfaces'],
+  ])('fetch the schema of the first segment of "%s"', async (xpath, expected) => {
+    const instance = new NetconfTest(options);
+
+    const getDataMock = vi.fn().mockReturnValue(of({ result: {}, xml: '<rpc-reply/>' }));
+    instance.getData = getDataMock;
+
+    await firstValueFrom(instance.guessNamespace(xpath));
+    expect(getDataMock).toHaveBeenCalledWith(expected, GetDataResultType.SCHEMA);
+  });
+
+  test('return the xmlns of the first segment', async () => {
+    const instance = new NetconfTest(options);
+
+    instance.getData = vi.fn().mockReturnValue(of({
+      result: { interfaces: { $: { xmlns: 'http://example.com/ns' } } },
+      xml: '<rpc-reply/>',
+    }));
+
+    await expect(firstValueFrom(instance.guessNamespace('//interfaces/interface')))
+      .resolves.toBe('http://example.com/ns');
+  });
+
+  test('return undefined if the schema of the first segment has no xmlns', async () => {
+    const instance = new NetconfTest(options);
+
+    instance.getData = vi.fn().mockReturnValue(of({
+      result: { interfaces: { $: { 'xmlns:nc': 'urn:ietf:params:xml:ns:netconf:base:1.0' } } },
+      xml: '<rpc-reply/>',
+    }));
+
+    await expect(firstValueFrom(instance.guessNamespace('//interfaces/interface')))
+      .resolves.toBeUndefined();
+  });
+
+  test.each([
+    '',
+    '/',
+    '//',
+    '   ',
+  ])('return undefined without fetching anything for "%s"', async xpath => {
+    const instance = new NetconfTest(options);
+
+    const getDataMock = vi.fn().mockReturnValue(of({ result: {}, xml: '<rpc-reply/>' }));
+    instance.getData = getDataMock;
+
+    await expect(firstValueFrom(instance.guessNamespace(xpath))).resolves.toBeUndefined();
+    expect(getDataMock).not.toHaveBeenCalled();
+  });
+
+  test('return undefined if fetching the schema fails', async () => {
+    const instance = new NetconfTest(options);
+
+    instance.getData = vi.fn().mockReturnValue(throwError(() => new Error('Netconf RPC error: unknown-element')));
+
+    await expect(firstValueFrom(instance.guessNamespace('//interfaces/interface')))
+      .resolves.toBeUndefined();
   });
 });
