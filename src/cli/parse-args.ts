@@ -563,6 +563,16 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
     throw new Error('Cannot mix --config-only, --state-only and --schema-only');
   }
 
+  // Which form the value arguments took, shared by create, delete and replace. `list` only when
+  // leaf-list items were actually given: with neither form present this must still be `keyvalue`,
+  // so that an argument-less operation edits the node the XPath addresses. Falling back to `list`
+  // there sent an edit-config whose target node was an empty array - no nc:operation anywhere, so
+  // the server replied <ok/> and changed nothing. The two forms are mutually exclusive; mixing
+  // them is rejected above.
+  const editConfigValues: EditConfigValues = listItems.length
+    ? { type: 'list', values: listItems }
+    : { type: 'keyvalue', values: keyValuePairs };
+
   const operationMap: Record<OperationType, (xpath?: string) => Operation> = {
     [OperationType.HELLO]: () => ({ type: OperationType.HELLO }),
     [OperationType.GET]: (x?: string) => ({
@@ -592,15 +602,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       type: OperationType.CREATE,
       options: {
         xpath: x ?? DEFAULT_XPATH,
-        editConfigValues: Object.keys(keyValuePairs).length
-          ? {
-            type: 'keyvalue',
-            values: keyValuePairs,
-          }
-          : {
-            type: 'list',
-            values: listItems,
-          },
+        editConfigValues,
         beforeKey: opt['before-key'],
         allowMultiple: opt['allow-multiple'],
       },
@@ -609,15 +611,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       type: OperationType.DELETE,
       options: {
         xpath: x ?? DEFAULT_XPATH,
-        editConfigValues: Object.keys(keyValuePairs).length
-          ? {
-            type: 'keyvalue',
-            values: keyValuePairs,
-          }
-          : {
-            type: 'list',
-            values: listItems,
-          },
+        editConfigValues,
         allowMultiple: opt['allow-multiple'],
       },
     }),
@@ -625,15 +619,7 @@ export async function parseArgs(): Promise<CliOptions | undefined> {
       type: OperationType.REPLACE,
       options: {
         xpath: x ?? DEFAULT_XPATH,
-        editConfigValues: Object.keys(keyValuePairs).length
-          ? {
-            type: 'keyvalue',
-            values: keyValuePairs,
-          }
-          : {
-            type: 'list',
-            values: listItems,
-          },
+        editConfigValues,
         allowMultiple: opt['allow-multiple'],
       },
     }),

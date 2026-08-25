@@ -419,6 +419,23 @@ describe('editConfigDelete', () => {
     }));
   });
 
+  // An empty list would have replaced the target node with an empty array, sending an
+  // edit-config with no nc:operation at all - accepted with <ok/> while changing nothing
+  test.each([
+    ['create', (n: NetconfTest): unknown => n.editConfigCreateListItems('/simple/xpath', [])],
+    ['delete', (n: NetconfTest): unknown => n.editConfigDeleteListItems('/simple/xpath', [])],
+    ['replace', (n: NetconfTest): unknown => n.editConfigReplaceListItems('/simple/xpath', [])],
+  ])('rejects an empty list for "%s" instead of sending a no-op', (op, call) => {
+    const options = { host: 'localhost', port: 830, user: 'admin', pass: 'admin' };
+    const instance = new NetconfTest(options);
+
+    instance.fetchSchema = vi.fn().mockReturnValue(of({}));
+    instance.rpcExec = vi.fn().mockReturnValue(of({ result: { 'rpc-reply': { ok: null } }, xml: '<rpc-reply/>' }));
+
+    expect(() => call(instance)).toThrow(`No list items to ${op}`);
+    expect(instance.rpcExec).not.toHaveBeenCalled();
+  });
+
   test('correctly delete list items', async () => {
     const options = { host: 'localhost', port: 830, user: 'admin', pass: 'admin', namespace: 'http://example.com/ns' };
     const instance = new NetconfTest(options);

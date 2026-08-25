@@ -3,3 +3,4 @@ dist/
 coverage/
 netconf
 netconf-musl
+main.js.map

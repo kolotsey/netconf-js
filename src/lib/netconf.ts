@@ -262,6 +262,12 @@ export class Netconf extends NetconfClient{
    * @returns {Observable<EditConfigResult>} Observable of the result
    */
   public editConfigCreateListItems(xpath: string, listItems: NetconfPrimitiveType[]): Observable<EditConfigResult> {
+    // An empty list would replace the target node with an empty array, producing a
+    // well-formed edit-config that carries no nc:operation at all - the server accepts it
+    // with <ok/> while changing nothing, which is indistinguishable from success
+    if(!listItems.length){
+      throw new Error('No list items to create: provide at least one value');
+    }
     const targetObj = {};
     const schema = this.fetchSchema(xpath);
 
@@ -335,6 +341,12 @@ export class Netconf extends NetconfClient{
    * @returns {Observable<EditConfigResult>} Observable of the result
    */
   public editConfigDeleteListItems(xpath: string, listItems: NetconfPrimitiveType[]): Observable<EditConfigResult> {
+    // An empty list would replace the target node with an empty array, producing a
+    // well-formed edit-config that carries no nc:operation at all - the server accepts it
+    // with <ok/> while changing nothing, which is indistinguishable from success
+    if(!listItems.length){
+      throw new Error('No list items to delete: provide at least one value');
+    }
     const targetObj = {};
     const schema = this.fetchSchema(xpath);
 
@@ -407,6 +419,12 @@ export class Netconf extends NetconfClient{
    * @returns {Observable<EditConfigResult>} Observable of the result
    */
   public editConfigReplaceListItems(xpath: string, listItems: NetconfPrimitiveType[]): Observable<EditConfigResult> {
+    // An empty list would replace the target node with an empty array, producing a
+    // well-formed edit-config that carries no nc:operation at all - the server accepts it
+    // with <ok/> while changing nothing, which is indistinguishable from success
+    if(!listItems.length){
+      throw new Error('No list items to replace: provide at least one value');
+    }
     const targetObj = {};
     const schema = this.fetchSchema(xpath);
 

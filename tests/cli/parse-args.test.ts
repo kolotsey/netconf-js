@@ -335,6 +335,26 @@ describe('parse arguments', () => {
     }));
   });
 
+  // With no value argument at all the form must stay `keyvalue`, so that the operation edits the
+  // node the XPath addresses. Routing to `list` with an empty array sent an edit-config whose
+  // target node was an empty array - carrying no nc:operation, so the server replied <ok/> and
+  // changed nothing, which is indistinguishable from a successful edit
+  test.each([
+    ['add', 'create'],
+    ['del', 'delete'],
+    ['rep', 'replace'],
+  ])('use the keyvalue form for "%s" without a value argument', async (op, expectedType) => {
+    process.argv = ['node', 'netconf', 'localhost', '/foo/bar[key="x"]', op];
+    expect(await parseArgs()).toEqual(expect.objectContaining({
+      operation: expect.objectContaining({
+        type: expectedType,
+        options: expect.objectContaining({
+          editConfigValues: { type: 'keyvalue', values: {} },
+        }),
+      }),
+    }));
+  });
+
   test.each([
     [['key=value'], {key: 'value'}],
     [['key1=value1', 'key2=value2'], {key1: 'value1', key2: 'value2'}],
